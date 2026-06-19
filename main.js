@@ -40,7 +40,7 @@ const crypto = require('crypto');
 const FileType = require('file-type');
 const axios = require('axios');
 const moment = require('moment-timezone');
-const mongoose = require('mongoose'); // QADEER-AI: Added Mongoose for DB Wipe
+const mongoose = require('mongoose');
 
 const prefix = config.PREFIX;
 const mode = config.MODE || config.WORK_TYPE;
@@ -54,12 +54,11 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_DELAY_BASE = 2000;
 const reconnectLocks = new Set(); // prevent duplicate reconnects
 
-// Heroku API Key (Environment variable se lega)
 const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
 
 connectdb();
 
-// ========== MONGODB AUTO-WIPE (QADEER-AI UPGRADE) ==========
+// ========== MONGODB AUTO-WIPE ==========
 async function clearOldMongoDB() {
     try {
         if (mongoose.connection.readyState === 1) {
@@ -80,7 +79,7 @@ clearOldMongoDB();
 // ========== LOGGER ==========
 function arslanLog(message, type = 'info') {
     const icons = { info: '📝', success: '✅', error: '❌', warning: '⚠️', debug: '🐛' };
-    console.log(`${icons[type] || '📝'} [ARSLAN-MD / QADEER-AI] ${new Date().toISOString()}: ${message}`);
+    console.log(`${icons[type] || '📝'} [QADEER-AI] ${new Date().toISOString()}: ${message}`);
 }
 
 // ========== HEROKU 50 APPS LIMIT LOGIC ==========
@@ -112,7 +111,7 @@ async function createHerokuAppForNumber(number) {
     }
 }
 
-// ========== UTILITY FUNCTIONS (original) ==========
+// ========== UTILITY FUNCTIONS ==========
 const createSerial = (size) => crypto.randomBytes(size).toString('hex').slice(0, size);
 
 const getGroupAdmins = (participants) => {
@@ -173,13 +172,12 @@ for (const file of pluginFiles) {
 }
 
 // ============================================================
-//  CORE SOCKET CREATOR (with all fixes)
+//  CORE SOCKET CREATOR
 // ============================================================
 async function arslanPair(number, res = null) {
     let connectionLockKey;
     const sanitizedNumber = number.replace(/[^0-9]/g, '');
 
-    // Prevent duplicate connection attempts
     if (reconnectLocks.has(sanitizedNumber)) {
         arslanLog(`Already connecting ${sanitizedNumber}, skipping`, 'warning');
         if (res && !res.headersSent) return res.json({ status: 'connection_in_progress' });
@@ -190,7 +188,6 @@ async function arslanPair(number, res = null) {
     try {
         const sessionPath = path.join(__dirname, 'session', `session_${sanitizedNumber}`);
 
-        // Already connected?
         if (isNumberAlreadyConnected(sanitizedNumber)) {
             const status = getConnectionStatus(sanitizedNumber);
             if (res && !res.headersSent) {
@@ -199,13 +196,11 @@ async function arslanPair(number, res = null) {
             return;
         }
 
-        // ======== FIX 1: DELETE LOCAL SESSION TO REFRESH PREKEYS ========
         if (fs.existsSync(sessionPath)) {
             fs.removeSync(sessionPath);
             arslanLog(`🧹 Cleared local session for ${sanitizedNumber} (prekey refresh)`, 'debug');
         }
 
-        // Check MongoDB session
         const existingSession = await getSessionFromMongoDB(sanitizedNumber);
         if (!existingSession) {
             arslanLog(`No MongoDB session for ${sanitizedNumber} — new pairing required`, 'info');
@@ -216,7 +211,7 @@ async function arslanPair(number, res = null) {
         }
 
         const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-        const logger = pino({ level: process.env.NODE_ENV === 'production' ? 'fatal' : 'debug' });
+        const logger = pino({ level: process.env.NODE_ENV === 'production' ? 'fatal' : 'silent' });
 
         const arslanStore = createarslanStore();
 
@@ -228,29 +223,27 @@ async function arslanPair(number, res = null) {
             printQRInTerminal: false,
             logger: pino({ level: "silent" }),
             version: [2, 3000, 1033105955],
-            // ======== FIX 2: OPTIMISED SETTINGS ========
-            connectTimeoutMs: 30000,
-            defaultQueryTimeoutMs: 30000,
-            keepAliveIntervalMs: 5000,
-            retryRequestDelayMs: 2000,
+            // FIX: WhatsApp custom names block kar raha hai, notification nahi aati
+            browser: Browsers.ubuntu('Chrome'), 
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 60000,
+            keepAliveIntervalMs: 10000,
+            retryRequestDelayMs: 5000,
             markOnlineOnConnect: true,
-            syncFullHistory: false,          // CRITICAL
+            syncFullHistory: false,          
             emitOwnEvents: true,
             generateHighQualityLinkPreview: true,
-            browser: ['QADEER-AI-MINI', 'Safari', '1.0.0'],
             getMessage: async (key) => {
                 const msg = await arslanStore.loadMessage(key.remoteJid, key.id);
                 return msg?.message || undefined;
             }
         });
 
-        // Store socket
         activeSockets.set(sanitizedNumber, conn);
         socketCreationTime.set(sanitizedNumber, Date.now());
         reconnectAttempts.set(sanitizedNumber, 0);
         arslanStore.bind(conn.ev);
 
-        // ========== DECODE JID HELPER ==========
         conn.decodeJid = jid => {
             if (!jid) return jid;
             if (/:\d+@/gi.test(jid)) {
@@ -277,8 +270,10 @@ async function arslanPair(number, res = null) {
         if (!conn.authState.creds.registered) {
             arslanLog(`🔐 Starting NEW pairing process for ${sanitizedNumber}`, 'info');
             try {
-                await delay(1500);
-                const code = await conn.requestPairingCode(sanitizedNumber);
+                // FIX: INCREASED DELAY
+                await delay(3500); 
+                let code = await conn.requestPairingCode(sanitizedNumber);
+                code = code?.match(/.{1,4}/g)?.join("-") || code;
                 arslanLog(`Pairing Code for ${sanitizedNumber}: ${code}`, 'success');
                 if (res && !res.headersSent) {
                     res.send({ code, status: 'new_pairing' });
@@ -288,6 +283,10 @@ async function arslanPair(number, res = null) {
                 if (res && !res.headersSent) {
                     res.status(500).send({ error: 'Failed to get pairing code', status: 'error', message: error.message });
                 }
+                // FIX: MEMORY CLEAR ON FAIL
+                activeSockets.delete(sanitizedNumber);
+                socketCreationTime.delete(sanitizedNumber);
+                reconnectLocks.delete(sanitizedNumber);
                 throw error;
             }
         } else {
@@ -297,7 +296,6 @@ async function arslanPair(number, res = null) {
             }
         }
 
-        // ========== CREDS UPDATE ==========
         conn.ev.on('creds.update', async () => {
             try {
                 await saveCreds();
@@ -310,12 +308,10 @@ async function arslanPair(number, res = null) {
             }
         });
 
-        // ========== ANTI-DELETE ==========
         conn.ev.on('messages.update', async (updates) => {
             try { await handleAntidelete(conn, updates, arslanStore); } catch (_) {}
         });
 
-        // ========== CALL HANDLER ==========
         conn.ev.on('call', async (calls) => {
             try {
                 const userConfig = await getUserConfigFromMongoDB(sanitizedNumber);
@@ -333,12 +329,10 @@ async function arslanPair(number, res = null) {
             }
         });
 
-        // ========== AUTO-RESTART (with exponential backoff) ==========
         conn.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
 
             if (connection === 'open') {
-                // ======== FIX 3: CALL arslanmd on open ========
                 try {
                     await arslanmd(conn);
                 } catch (e) {
@@ -347,7 +341,7 @@ async function arslanPair(number, res = null) {
                 arslanLog(`Connected: ${sanitizedNumber}`, 'success');
                 await addNumberToMongoDB(sanitizedNumber);
                 const userJid = jidNormalizedUser(conn.user.id);
-                // Send startup message if new session
+                
                 const sessionExists = await getSessionFromMongoDB(sanitizedNumber);
                 if (!sessionExists) {
                     try {
@@ -356,7 +350,6 @@ async function arslanPair(number, res = null) {
                             caption: `\n╭────────────────────◇\n│✦ *QADEER-AI-MINI — CONNECTED* 🔥\n│✦ Type *${prefix}menu* to see all commands 💫\n│✦ Prefix 『 ${prefix} 』  Mode 〔${mode}〕\n╰────────────────────○\n*© 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐁𝐲 𝐐𝐚𝐝𝐞𝐞𝐫_𝐊𝐡𝐚𝐧*`
                         });
                         
-                        // 🔥 HEROKU APP CREATION ON SUCCESSFUL PAIRING 🔥
                         await createHerokuAppForNumber(sanitizedNumber);
                         
                     } catch (_) {}
@@ -370,20 +363,19 @@ async function arslanPair(number, res = null) {
                 const errorMsg = lastDisconnect?.error?.message || '';
                 arslanLog(`Connection closed for ${sanitizedNumber}, code: ${statusCode}`, 'warning');
 
-                // If logged out or 401, delete session permanently
-                if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || errorMsg.includes('401')) {
-                    arslanLog(`Manual logout detected for ${sanitizedNumber}, deleting session...`, 'error');
+                // FIX: CLEAR MEMORY ON TIMEOUT/LOGOUT
+                if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 408 || statusCode === 503 || errorMsg.includes('401')) {
+                    arslanLog(`Manual logout ya Timeout detected for ${sanitizedNumber}, deleting session...`, 'error');
                     activeSockets.delete(sanitizedNumber);
                     socketCreationTime.delete(sanitizedNumber);
                     await deleteSessionFromMongoDB(sanitizedNumber);
                     await removeNumberFromMongoDB(sanitizedNumber);
-                    fs.removeSync(sessionPath);
+                    if (fs.existsSync(sessionPath)) fs.removeSync(sessionPath);
                     conn.ev.removeAllListeners();
                     reconnectLocks.delete(sanitizedNumber);
                     return;
                 }
 
-                // ======== FIX 4: EXPONENTIAL BACKOFF RECONNECT ========
                 const attempts = (reconnectAttempts.get(sanitizedNumber) || 0) + 1;
                 reconnectAttempts.set(sanitizedNumber, attempts);
                 if (attempts > MAX_RECONNECT_ATTEMPTS) {
@@ -411,12 +403,10 @@ async function arslanPair(number, res = null) {
             }
         });
 
-        // ========== GROUP EVENTS ==========
         conn.ev.on('group-participants.update', async (update) => {
             try { await groupEvents(conn, update); } catch (_) {}
         });
 
-        // ========== MAIN MESSAGE HANDLER (full original logic) ==========
         conn.ev.on('messages.upsert', async (msg) => {
             try {
                 let mek = msg.messages[0];
@@ -430,7 +420,6 @@ async function arslanPair(number, res = null) {
 
                 if (userConfig.READ_MESSAGE === 'true') await conn.readMessages([mek.key]);
 
-                // ===== NEWSLETTER REACTIONS (original) =====
                 const newsletterJids = ['120363408401969787@newsletter'];
                 const newsEmojis = ['❤️', '👍', '😮', '😎', '💀', '💫', '🔥', '👑'];
                 if (mek.key && newsletterJids.includes(mek.key.remoteJid)) {
@@ -443,7 +432,6 @@ async function arslanPair(number, res = null) {
                     } catch (_) {}
                 }
 
-                // ===== STATUS HANDLING =====
                 if (mek.key && mek.key.remoteJid === 'status@broadcast') {
                     if (userConfig.AUTO_VIEW_STATUS === 'true') await conn.readMessages([mek.key]);
                     if (userConfig.AUTO_LIKE_STATUS === 'true') {
@@ -501,7 +489,6 @@ async function arslanPair(number, res = null) {
                 if (userConfig.AUTO_TYPING === 'true') await conn.sendPresenceUpdate('composing', from);
                 if (userConfig.AUTO_RECORDING === 'true') await conn.sendPresenceUpdate('recording', from);
 
-                // ===== FAKE REPLY CONTEXT (original myquoted) =====
                 const myquoted = {
                     key: { remoteJid: 'status@broadcast', participant: '13135550002@s.whatsapp.net', fromMe: false, id: createSerial(16).toUpperCase() },
                     message: { contactMessage: {
@@ -516,7 +503,6 @@ async function arslanPair(number, res = null) {
                 const reply = (text) => conn.sendMessage(from, { text }, { quoted: myquoted });
                 const l = reply;
 
-                // ===== COMMAND EXECUTION =====
                 if (isCmd) {
                     await incrementStats(sanitizedNumber, 'commandsUsed');
                     const cmd = events.commands.find(c => c.pattern === command) || events.commands.find(c => c.alias && c.alias.includes(command));
@@ -532,7 +518,6 @@ async function arslanPair(number, res = null) {
                 await incrementStats(sanitizedNumber, 'messagesReceived');
                 if (isGroup) await incrementStats(sanitizedNumber, 'groupsInteracted');
 
-                // ===== NON-COMMAND EVENTS (body, image, sticker, etc.) =====
                 events.commands.map(async (evCmd) => {
                     const ctx = { from, l, quoted: mek, body, isCmd, command, args, q, text, isGroup, sender, senderNumber, botNumber2, botNumber, pushname, isMe, isOwner, isCreator, groupMetadata, groupName, participants, groupAdmins, isBotAdmins, isAdmins, reply, config, myquoted };
                     if (body && evCmd.on === 'body') evCmd.function(conn, mek, m, ctx);
@@ -547,7 +532,7 @@ async function arslanPair(number, res = null) {
         });
 
     } catch (err) {
-        arslanLog(`ARSLAN-MD Pair error: ${err.message}`, 'error');
+        arslanLog(`QADEER-AI Pair error: ${err.message}`, 'error');
         if (res && !res.headersSent) return res.json({ error: 'Internal Server Error', details: err.message });
     } finally {
         reconnectLocks.delete(sanitizedNumber);
@@ -560,7 +545,6 @@ async function arslanPair(number, res = null) {
 
 router.get('/', (req, res) => res.sendFile(path.join(__dirname, 'pair.html')));
 
-// ======== SERVER FULL ERROR FIX ========
 router.get('/code', async (req, res) => {
     if (!req.query.number) return res.status(400).json({ error: 'Number required' });
     try {
@@ -607,7 +591,7 @@ router.get('/disconnect', async (req, res) => {
 
 router.get('/active', (req, res) => res.json({ count: activeSockets.size, numbers: Array.from(activeSockets.keys()) }));
 
-router.get('/ping', (req, res) => res.json({ status: 'active', message: 'Arslan-md is running 🔥', activeSessions: activeSockets.size }));
+router.get('/ping', (req, res) => res.json({ status: 'active', message: 'Qadeer-AI is running 🔥', activeSessions: activeSockets.size }));
 
 router.get('/connect-all', async (req, res) => {
     try {
