@@ -394,23 +394,20 @@ footer{
    
 </div>
 
-
 <script>
   async function getCode() {
     const num = document.getElementById("number").value.replace(/[^0-9]/g, '');
     const codeBox = document.getElementById("codeBox");
     const borderBox = document.getElementById("borderBox");
 
-    // Agar number khali hai
     if (!num) {
-        borderBox.style.display = "block"; // Box show karo
-        codeBox.style.letterSpacing = "normal"; // Error ke liye spacing normal
-        codeBox.style.color = "#ff4d4d"; // Error color Red
+        borderBox.style.display = "block"; 
+        codeBox.style.letterSpacing = "normal"; 
+        codeBox.style.color = "#ff4d4d"; 
         codeBox.innerText = "APNA WHATSAPP NUMBER LIKHE";
         return;
     }
 
-    // Loading State
     borderBox.style.display = "block";
     codeBox.style.letterSpacing = "normal";
     codeBox.style.color = "#fff"; 
@@ -421,25 +418,24 @@ footer{
         const data = await res.json();
         
         if (data.code) {
-            codeBox.style.letterSpacing = "4px"; // Code ke liye spacing wapis
-            codeBox.style.color = "#fff"; 
+            codeBox.style.letterSpacing = "4px"; 
+            codeBox.style.color = "#00ffcc"; // Neon Cyan color Qadeer AI vibe ke liye
             codeBox.innerText = data.code;
+        } else if (data.status === 'already_connected') {
+            codeBox.style.letterSpacing = "normal";
+            codeBox.style.color = "#ffaa00"; // Orange color alert ke liye
+            codeBox.innerText = "ALREADY CONNECTED";
         } else {
+            codeBox.style.letterSpacing = "normal";
             codeBox.style.color = "#ff4d4d";
-            codeBox.innerText = "SERVER FULL";
+            codeBox.innerText = "TRY AGAIN LATER";
         }
     } catch (e) {
+        codeBox.style.letterSpacing = "normal";
         codeBox.style.color = "#ff4d4d";
-        codeBox.innerText = "SERVER IS FULL";
+        codeBox.innerText = "NETWORK ERROR"; // Ye asal error ab yahan show hoga
     }
 }
-
-  
-
-
-
-
-
 
 function copyCode(code) {
     navigator.clipboard.writeText(code);
@@ -447,19 +443,14 @@ function copyCode(code) {
     const originalText = display.innerText;
 
     display.innerText = "COPIED";
-    display.style.borderColor = "var(--success)";
-    display.style.color = "var(--success)";
+    display.style.borderColor = "#00ffcc";
+    display.style.color = "#00ffcc";
 
     setTimeout(() => {
         display.innerText = originalText;
         display.style.borderColor = "var(--soft)";
         display.style.color = "var(--soft)";
     }, 1500);
-}
-
-// Optional: Simple placeholder sound function
-function playSound(type) {
-    // You can add real sounds here later if you want
 }
 </script>
 

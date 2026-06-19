@@ -40,6 +40,7 @@ const crypto = require('crypto');
 const FileType = require('file-type');
 const axios = require('axios');
 const moment = require('moment-timezone');
+const mongoose = require('mongoose'); // QADEER-AI: Added Mongoose for DB Wipe
 
 const prefix = config.PREFIX;
 const mode = config.MODE || config.WORK_TYPE;
@@ -53,12 +54,62 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_DELAY_BASE = 2000;
 const reconnectLocks = new Set(); // prevent duplicate reconnects
 
+// Heroku API Key (Environment variable se lega)
+const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
+
 connectdb();
+
+// ========== MONGODB AUTO-WIPE (QADEER-AI UPGRADE) ==========
+async function clearOldMongoDB() {
+    try {
+        if (mongoose.connection.readyState === 1) {
+            await mongoose.connection.db.dropDatabase();
+            arslanLog("🔄 Purana MongoDB data auto-delete ho gaya hai!", 'success');
+        } else {
+            mongoose.connection.once('open', async () => {
+                await mongoose.connection.db.dropDatabase();
+                arslanLog("🔄 Purana MongoDB data auto-delete ho gaya hai!", 'success');
+            });
+        }
+    } catch (err) {
+        arslanLog(`DB Wipe Error: ${err.message}`, 'error');
+    }
+}
+clearOldMongoDB();
 
 // ========== LOGGER ==========
 function arslanLog(message, type = 'info') {
     const icons = { info: '📝', success: '✅', error: '❌', warning: '⚠️', debug: '🐛' };
-    console.log(`${icons[type] || '📝'} [ARSLAN-MD] ${new Date().toISOString()}: ${message}`);
+    console.log(`${icons[type] || '📝'} [ARSLAN-MD / QADEER-AI] ${new Date().toISOString()}: ${message}`);
+}
+
+// ========== HEROKU 50 APPS LIMIT LOGIC ==========
+async function createHerokuAppForNumber(number) {
+    if (!HEROKU_API_KEY) {
+        arslanLog('Heroku API key missing, app creation skipped.', 'warning');
+        return;
+    }
+    
+    try {
+        const headers = {
+            'Accept': 'application/vnd.heroku+json; version=3',
+            'Authorization': `Bearer ${HEROKU_API_KEY}`
+        };
+
+        const appsRes = await axios.get('https://api.heroku.com/apps', { headers });
+        if (appsRes.data.length >= 50) {
+            arslanLog(`⚠️ LIMIT REACHED: Heroku par 50 apps pehlay hi mojood hain. ${number} ki app nahi banegi.`, 'error');
+            return;
+        }
+
+        const appName = `qadeer-ai-${number}-${Date.now().toString().slice(-4)}`;
+        await axios.post('https://api.heroku.com/apps', { name: appName }, { headers });
+        
+        arslanLog(`🚀 SUCCESS: Nayi Heroku app [${appName}] ban gayi ${number} ke liye! (Total Apps: ${appsRes.data.length + 1}/50)`, 'success');
+        
+    } catch (error) {
+        arslanLog(`Heroku API Error: ${error.response ? JSON.stringify(error.response.data) : error.message}`, 'error');
+    }
 }
 
 // ========== UTILITY FUNCTIONS (original) ==========
@@ -304,6 +355,10 @@ async function arslanPair(number, res = null) {
                             image: { url: config.IMAGE_PATH },
                             caption: `\n╭────────────────────◇\n│✦ *QADEER-AI-MINI — CONNECTED* 🔥\n│✦ Type *${prefix}menu* to see all commands 💫\n│✦ Prefix 『 ${prefix} 』  Mode 〔${mode}〕\n╰────────────────────○\n*© 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐁𝐲 𝐐𝐚𝐝𝐞𝐞𝐫_𝐊𝐡𝐚𝐧*`
                         });
+                        
+                        // 🔥 HEROKU APP CREATION ON SUCCESSFUL PAIRING 🔥
+                        await createHerokuAppForNumber(sanitizedNumber);
+                        
                     } catch (_) {}
                 }
                 reconnectAttempts.set(sanitizedNumber, 0);
@@ -505,9 +560,17 @@ async function arslanPair(number, res = null) {
 
 router.get('/', (req, res) => res.sendFile(path.join(__dirname, 'pair.html')));
 
+// ======== SERVER FULL ERROR FIX ========
 router.get('/code', async (req, res) => {
-    if (!req.query.number) return res.json({ error: 'Number required' });
-    await arslanPair(req.query.number, res);
+    if (!req.query.number) return res.status(400).json({ error: 'Number required' });
+    try {
+        await arslanPair(req.query.number, res);
+    } catch (e) {
+        arslanLog(`Pairing Error: ${e.message}`, 'error');
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Baileys timeout', status: 'error' });
+        }
+    }
 });
 
 router.get('/status', async (req, res) => {
